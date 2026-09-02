@@ -95,7 +95,7 @@ jobs:
             -e DB_USER=root \
             -e DB_PASSWORD=secret \
             -e SECRET=hybrid-mic-ci-secret-not-for-production \
-            -e ADMIN_EMAIL=ci@example.invalid \
+            -e ADMIN_EMAIL=ci@example.com \
             -e ADMIN_PASSWORD=hybrid-mic-ci-password \
             hm-directus:${GITHUB_SHA})"
 
