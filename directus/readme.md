@@ -1,3 +1,16 @@
+# Hybrid Mic Directus 11 maintenance fork
+
+This fork preserves Directus 11 for Hybrid Mic while upstream security and deployment-blocking fixes are evaluated and
+backported. The default maintenance branch is `11.x-hybrid-mic`; project releases use immutable
+`11.<minor>.<patch>-hm.<revision>` tags and publish only to GHCR. See the
+[`maintenance policy`](https://github.com/thesawdawg/hm_directus/blob/11.x-hybrid-mic/HYBRID_MIC_MAINTENANCE.md) and
+[`patch ledger`](https://github.com/thesawdawg/hm_directus/blob/11.x-hybrid-mic/PATCH_LEDGER.md) before changing or
+releasing this fork.
+
+The upstream project, history, licenses, and notices remain authoritative and are retained below.
+
+---
+
 <p align="center"><img alt="Directus Logo" src="https://user-images.githubusercontent.com/522079/158864859-0fbeae62-9d7a-4619-b35e-f8fa5f68e0c8.png"></p>
 
 ---

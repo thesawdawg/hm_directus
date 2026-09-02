@@ -19,6 +19,9 @@ env:
 jobs:
   check-npm-packages:
     name: Check NPM Packages
+    # This upstream publisher is retained for history but must never run in a
+    # fork. Hybrid Mic uses hybrid-mic-release.yml and publishes only to GHCR.
+    if: github.repository == 'directus/directus'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

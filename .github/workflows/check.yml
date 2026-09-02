@@ -4,10 +4,12 @@ on:
   pull_request:
     branches:
       - main
+      - 11.x-hybrid-mic
 
   push:
     branches:
       - main
+      - 11.x-hybrid-mic
 
 permissions:
   contents: read

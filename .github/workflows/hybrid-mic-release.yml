@@ -1,0 +1,185 @@
+name: Hybrid Mic GHCR Release
+
+on:
+  push:
+    tags:
+      - '11.*-hm.*'
+
+permissions:
+  contents: write
+  packages: write
+  security-events: write
+  attestations: write
+  id-token: write
+
+concurrency:
+  group: hybrid-mic-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  EXTENSIONS_SDK_VERSION: 17.1.4
+  VISUAL_EDITING_VERSION: 2.0.1
+
+jobs:
+  build-scan-release:
+    name: Build, scan, and release immutable image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$GITHUB_REF_NAME" =~ ^11\.[0-9]+\.[0-9]+-hm\.[0-9]+$ ]]; then
+            echo "Unsupported release tag: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          git merge-base --is-ancestor v11.17.4 HEAD
+          test "$(node -p "require('./directus/package.json').version")" = "${GITHUB_REF_NAME%%-hm.*}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate immutable image tags and labels
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=long
+          labels: |
+            org.opencontainers.image.title=Hybrid Mic Directus
+            org.opencontainers.image.description=Project-maintained Directus 11 image
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+
+      - name: Build and push multi-architecture image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+
+      - name: Scan image and produce SARIF
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+
+      - name: Upload scan to GitHub code scanning
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Enforce high and critical vulnerability gate
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Publish exact release tag after security gate
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${GITHUB_REF_NAME}" \
+            "${IMAGE}@${IMAGE_DIGEST}"
+          docker buildx imagetools inspect "${IMAGE}:${GITHUB_REF_NAME}"
+
+      - name: Write build metadata
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg release_tag "$GITHUB_REF_NAME" \
+            --arg build_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg node_version "$(node -p "require('./package.json').engines.node")" \
+            --arg pnpm_version "$(node -p "require('./package.json').packageManager")" \
+            --arg lockfile_sha256 "$(sha256sum pnpm-lock.yaml | cut -d ' ' -f 1)" \
+            --arg directus_version "$(node -p "require('./directus/package.json').version")" \
+            --arg image "${IMAGE}@${IMAGE_DIGEST}" \
+            --arg extensions_sdk_version "$EXTENSIONS_SDK_VERSION" \
+            --arg visual_editing_version "$VISUAL_EDITING_VERSION" \
+            '{
+              source_commit: $source_commit,
+              release_tag: $release_tag,
+              build_date: $build_date,
+              node_version: $node_version,
+              pnpm_version: $pnpm_version,
+              lockfile_sha256: $lockfile_sha256,
+              directus_version: $directus_version,
+              image: $image,
+              extensions_sdk_version: $extensions_sdk_version,
+              visual_editing_version: $visual_editing_version
+            }' > build-metadata.json
+
+      - name: Upload release proof
+        uses: actions/upload-artifact@v6
+        with:
+          name: hybrid-mic-release-proof-${{ github.ref_name }}
+          path: |
+            build-metadata.json
+            sbom.spdx.json
+            trivy-results.sarif
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --generate-notes \
+            --title "Directus $GITHUB_REF_NAME" \
+            build-metadata.json sbom.spdx.json trivy-results.sarif
