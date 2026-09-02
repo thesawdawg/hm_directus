@@ -4,9 +4,31 @@ on:
   pull_request:
     branches:
       - 11.x-hybrid-mic
+    paths:
+      - api/**
+      - app/**
+      - directus/**
+      - packages/**
+      - tests/blackbox/**
+      - Dockerfile
+      - package.json
+      - pnpm-lock.yaml
+      - .github/actions/prepare/**
+      - .github/workflows/hybrid-mic-ci.yml
   push:
     branches:
       - 11.x-hybrid-mic
+    paths:
+      - api/**
+      - app/**
+      - directus/**
+      - packages/**
+      - tests/blackbox/**
+      - Dockerfile
+      - package.json
+      - pnpm-lock.yaml
+      - .github/actions/prepare/**
+      - .github/workflows/hybrid-mic-ci.yml
 
 permissions:
   contents: read
