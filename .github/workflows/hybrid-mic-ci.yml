@@ -1,0 +1,116 @@
+name: Hybrid Mic Supported Stack
+
+on:
+  pull_request:
+    branches:
+      - 11.x-hybrid-mic
+  push:
+    branches:
+      - 11.x-hybrid-mic
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hybrid-mic-supported-stack-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_OPTIONS: --max_old_space_size=6144
+
+jobs:
+  mysql-blackbox:
+    name: MySQL 8.4 blackbox
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Prepare Directus
+        uses: ./.github/actions/prepare
+
+      - name: Start supported services from empty state
+        env:
+          MYSQL_IMAGE: mysql:8.4
+          REDIS_IMAGE: redis:6-alpine
+        run: |
+          docker compose -f tests/blackbox/docker-compose.yml up \
+            mysql redis minio minio-mc \
+            -d --quiet-pull --wait
+
+      - name: Run MySQL blackbox tests
+        run: TEST_DB=mysql pnpm run test:blackbox --project db
+
+  image-smoke:
+    name: Built image boots on empty MySQL 8.4
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build candidate image from clean checkout
+        run: docker build --tag hm-directus:${{ github.sha }} .
+
+      - name: Bootstrap Directus and check health
+        shell: bash
+        run: |
+          set -euo pipefail
+          network="hm-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mysql_id=""
+          directus_id=""
+          cleanup() {
+            [[ -z "$directus_id" ]] || docker rm -f "$directus_id" >/dev/null 2>&1 || true
+            [[ -z "$mysql_id" ]] || docker rm -f "$mysql_id" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker network create "$network"
+          mysql_id="$(docker run -d \
+            --network "$network" \
+            --network-alias mysql \
+            --health-cmd='mysqladmin ping -h 127.0.0.1 -uroot -psecret --silent' \
+            --health-interval=2s \
+            --health-timeout=5s \
+            --health-retries=60 \
+            -e MYSQL_ROOT_PASSWORD=secret \
+            -e MYSQL_DATABASE=directus \
+            mysql:8.4)"
+
+          for _ in $(seq 1 60); do
+            [[ "$(docker inspect --format '{{.State.Health.Status}}' "$mysql_id")" = healthy ]] && break
+            sleep 2
+          done
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$mysql_id")" = healthy ]]
+
+          directus_id="$(docker run -d \
+            --network "$network" \
+            -p 127.0.0.1:8055:8055 \
+            -e DB_CLIENT=mysql \
+            -e DB_HOST=mysql \
+            -e DB_PORT=3306 \
+            -e DB_DATABASE=directus \
+            -e DB_USER=root \
+            -e DB_PASSWORD=secret \
+            -e SECRET=hybrid-mic-ci-secret-not-for-production \
+            -e ADMIN_EMAIL=ci@example.invalid \
+            -e ADMIN_PASSWORD=hybrid-mic-ci-password \
+            hm-directus:${GITHUB_SHA})"
+
+          healthy=0
+          for _ in $(seq 1 90); do
+            if curl --fail --silent http://127.0.0.1:8055/server/health >/dev/null; then
+              healthy=1
+              break
+            fi
+            if [[ "$(docker inspect --format '{{.State.Running}}' "$directus_id")" != true ]]; then
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$healthy" != 1 ]]; then
+            docker logs "$directus_id"
+            exit 1
+          fi

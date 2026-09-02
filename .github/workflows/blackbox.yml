@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - 11.x-hybrid-mic
     paths:
       - api/**
       - tests/blackbox/**
